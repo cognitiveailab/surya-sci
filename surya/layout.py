@@ -114,7 +114,8 @@ def get_regions_from_detection_result(detection_result: TextDetectionResult, hea
                 if bbox2.label != "Table" or bbox_idx2 in to_remove or bbox_idx == bbox_idx2:
                     continue
 
-                if bbox.intersection_pct(bbox2) > 0:
+                #if bbox.intersection_pct(bbox2) > 0:
+                if (bbox.touching(bbox2, wiggle_horizontal=10, wiggle_vertical=1)): ## PJ: Changed from intersection_pct to touching, allowing wiggle room
                     bbox.merge(bbox2)
                     to_remove.add(bbox_idx2)
 

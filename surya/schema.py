@@ -86,6 +86,17 @@ class PolygonBox(BaseModel):
         intersection = self.intersection_area(other, margin)
         return intersection / self.area
 
+    #  Checks to see if boxes touch at any point. Allows boxes to be separated by up to wiggle_horizontal and wiggle_vertical and still be true.
+    def touching(self, other, wiggle_horizontal=0, wiggle_vertical=0):
+        # Check if the boxes are touching
+        # Left/right
+        if self.bbox[0] - wiggle_horizontal <= other.bbox[2] + wiggle_horizontal and self.bbox[2] + wiggle_horizontal >= other.bbox[0] - wiggle_horizontal:
+            # Top/bottom
+            if self.bbox[1] - wiggle_vertical <= other.bbox[3] + wiggle_vertical and self.bbox[3] + wiggle_vertical >= other.bbox[1] - wiggle_vertical:
+                return True
+        return False
+
+
 
 class Bbox(BaseModel):
     bbox: List[float]
