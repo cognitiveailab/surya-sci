@@ -6,14 +6,35 @@ import numpy as np
 
 from surya.detection import batch_detection
 from surya.postprocessing.heatmap import keep_largest_boxes, get_and_clean_boxes, get_detected_boxes
-from surya.schema import LayoutResult, LayoutBox, TextDetectionResult
+from surya.schema import LayoutResult, LayoutBox, TextDetectionResult, TextLine, OCRResult, PolygonBox
 from surya.settings import settings
 
 
-def get_regions_from_detection_result(detection_result: TextDetectionResult, heatmaps: List[np.ndarray], orig_size, id2label, segment_assignment, vertical_line_width=20) -> List[LayoutBox]:
+# A Helper function to get the text lines from within a given bbox
+def get_text_lines_within_bbox(bbox: PolygonBox, text_predictions:OCRResult) -> List[TextLine]:
+    text_lines = []
+    #print("BBOX: " + str(bbox))
+    #print("Type of text_predictions: " + str(type(text_predictions)))
+    #print("TEXT PREDICTIONS: " + str(text_predictions))
+
+    for text_line in text_predictions.text_lines:
+        #print("Type of text_line: " + str(type(text_line)))
+        #print("TEXT LINE: " + str(text_line))
+        if bbox.intersection_pct(text_line) > .01:
+            text = text_line.text
+            text_lines.append(text)
+
+    #print("Resulting text: " + str(text_lines))
+
+    return text_lines
+
+def get_regions_from_detection_result(detection_result: TextDetectionResult, heatmaps: List[np.ndarray], orig_size, id2label, segment_assignment, vertical_line_width=20, text_predictions=None) -> List[LayoutBox]:
     logits = np.stack(heatmaps, axis=0)
     vertical_line_bboxes = [line for line in detection_result.vertical_lines]
     line_bboxes = detection_result.bboxes
+
+    #print("TEXT PREDICTIONS: ")
+    #print(text_predictions)
 
     # Scale back to processor size
     for line in vertical_line_bboxes:
@@ -131,6 +152,45 @@ def get_regions_from_detection_result(detection_result: TextDetectionResult, hea
 
     detected_boxes = [bbox for bbox in new_boxes if bbox.area > 16]
 
+    ## PJ: If an area starts with the text "Table X:" or "Figure X:", we can assume it's a caption.  Change it's label from "text" to "caption"
+    for bbox in detected_boxes:
+        if bbox.label == "Text":
+            # Get the lines of text within the bbox
+            text_lines = get_text_lines_within_bbox(bbox, text_predictions)
+            # Join them together
+            text = " ".join(text_lines)
+            print("Text: " + str(text))
+
+            # Sanitize the text
+            textSanitized = text.replace("\n", " ").replace("\r", " ").replace("\t", " ").strip().lower()
+
+            import re
+            # Check if the text starts with "Table X:" or "Figure X:"
+            if re.match(r"^(table|figure)\s\d+:", textSanitized):
+                #print("")
+                #print("### Caption detected: " + str(text))
+                #print("")
+                bbox.label = "Caption"
+            #if bbox.area > 100:
+            #    if bbox.text and bbox.text.startswith("Table") or bbox.text.startswith("Figure"):
+            #        print("Caption detected: " + str(bbox.text))
+            #        bbox.label = "Caption"
+
+    ## PJ: Merge caption boxes
+    for i in range(5): # Up to 5 rounds of merging
+        to_remove = set()
+        for bbox_idx, bbox in enumerate(detected_boxes):
+            if bbox.label != "Caption" or bbox_idx in to_remove:
+                continue
+
+            for bbox_idx2, bbox2 in enumerate(detected_boxes):
+                if bbox2.label != "Caption" or bbox_idx2 in to_remove or bbox_idx == bbox_idx2:
+                    continue
+
+                if (bbox.touching(bbox2, wiggle_horizontal=1, wiggle_vertical=5)):
+                    bbox.merge(bbox2)
+                    to_remove.add(bbox_idx2)
+
     # Remove bboxes contained inside others, unless they're captions
     contained_bbox = []
     for i, bbox in enumerate(detected_boxes):
@@ -161,12 +221,12 @@ def get_regions(heatmaps: List[np.ndarray], orig_size, id2label, segment_assignm
     return bboxes
 
 
-def parallel_get_regions(heatmaps: List[np.ndarray], orig_size, id2label, detection_results=None) -> LayoutResult:
+def parallel_get_regions(heatmaps: List[np.ndarray], orig_size, id2label, detection_results=None, text_predictions=None) -> LayoutResult:
     logits = np.stack(heatmaps, axis=0)
     segment_assignment = logits.argmax(axis=0)
     if detection_results is not None:
         bboxes = get_regions_from_detection_result(detection_results, heatmaps, orig_size, id2label,
-                                                   segment_assignment)
+                                                   segment_assignment, text_predictions=text_predictions)
     else:
         bboxes = get_regions(heatmaps, orig_size, id2label, segment_assignment)
 
@@ -182,21 +242,21 @@ def parallel_get_regions(heatmaps: List[np.ndarray], orig_size, id2label, detect
     return result
 
 
-def batch_layout_detection(images: List, model, processor, detection_results: Optional[List[TextDetectionResult]] = None, batch_size=None) -> List[LayoutResult]:
+def batch_layout_detection(images: List, model, processor, detection_results: Optional[List[TextDetectionResult]] = None, batch_size=None, text_predictions_by_image=Optional[List[OCRResult]]) -> List[LayoutResult]:
     preds, orig_sizes = batch_detection(images, model, processor, batch_size=batch_size)
     id2label = model.config.id2label
 
     results = []
     if settings.IN_STREAMLIT or len(images) < settings.DETECTOR_MIN_PARALLEL_THRESH: # Ensures we don't parallelize with streamlit or too few images
         for i in range(len(images)):
-            result = parallel_get_regions(preds[i], orig_sizes[i], id2label, detection_results[i] if detection_results else None)
+            result = parallel_get_regions(preds[i], orig_sizes[i], id2label, detection_results[i] if detection_results else None, text_predictions_by_image[i] if text_predictions_by_image else None)
             results.append(result)
     else:
         futures = []
         max_workers = min(settings.DETECTOR_POSTPROCESSING_CPU_WORKERS, len(images))
         with ProcessPoolExecutor(max_workers=max_workers) as executor:
             for i in range(len(images)):
-                future = executor.submit(parallel_get_regions, preds[i], orig_sizes[i], id2label, detection_results[i] if detection_results else None)
+                future = executor.submit(parallel_get_regions, preds[i], orig_sizes[i], id2label, detection_results[i] if detection_results else None, text_predictions_by_image[i] if text_predictions_by_image else None)
                 futures.append(future)
 
             for future in futures:
