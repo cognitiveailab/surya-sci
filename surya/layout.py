@@ -165,12 +165,24 @@ def get_regions_from_detection_result(detection_result: TextDetectionResult, hea
             textSanitized = text.replace("\n", " ").replace("\r", " ").replace("\t", " ").strip().lower()
 
             import re
-            # Check if the text starts with "Table X:" or "Figure X:"
-            if re.match(r"^(table|figure)\s\d+:", textSanitized):
-                #print("")
-                #print("### Caption detected: " + str(text))
-                #print("")
+            # # Check if the text starts with "Table X:" or "Figure X:"
+            # if re.match(r"^(table|figure)\s\d+:", textSanitized):
+            #     #print("")
+            #     #print("### Caption detected: " + str(text))
+            #     #print("")
+            #     bbox.label = "Caption"
+
+            # Expand above to handle these cases:
+            # Roman numerals for tables (e.g. I, II, III, IV, V, VI, VII, VIII, IX, X, ...)
+            # Shortened label for table/figure: "Tab.", "Fig."
+            # Period at the end of the label instead of a colon
+            # Dash instead of a space between the number (e.g. "Table-1:")
+            # Sub-numbered tables (e.g. "Table 1.1:", "Table 1.2:", "Table 1.3:", ...)
+            # Here's the regular expression to use: (?i)\b(?:table|tab\.|figure|fig\.)[- ]?(?:[ivxlcdm]+\b|\d+(\.\d+)*)(?::|\.)
+            # As above, but should check that the text is at the start of the string
+            if re.match(r"^(?i)\b(?:table|tab\.|figure|fig\.)[- ]?(?:[ivxlcdm]+\b|\d+(\.\d+)*)(?::|\.).*", textSanitized):
                 bbox.label = "Caption"
+
             #if bbox.area > 100:
             #    if bbox.text and bbox.text.startswith("Table") or bbox.text.startswith("Figure"):
             #        print("Caption detected: " + str(bbox.text))
